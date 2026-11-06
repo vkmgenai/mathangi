@@ -1,0 +1,5 @@
+customer_data
+customer_data/*
+qdrant_db
+qdrant_db/*
+requirements.txt
