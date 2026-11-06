@@ -13,6 +13,5 @@ Install the project dependencies with Python 3.10 or newer:
 python -m pip install -r requirements.txt
 ```
 
-Run `sync_market_docs.py` to refresh the Qdrant collections. Zerodha instruments and circulars remain in `zerodha_market_docs`; Kuvera, Groww, and Paytm Money collections are built from matching user-provided statement files in `customer_data`. Moneycontrol indexes current market and mutual-fund headlines with short listing snippets, publication metadata when available, and source links.
+Run python3 app.py and browse http://127.0.0.1:50001/
 
-Run `mcp_server.py` as a stdio MCP server. It exposes `query_zerodha_market_docs`, `query_kuvera_portfolio`, `query_groww_portfolio`, `query_paytmmoney_portfolio`, and `query_moneycontrol_market_docs`, plus `search_investment_research` for retrieving evidence by asset class. These tools provide source context for downstream suggestions; they do not produce guaranteed returns or execute trades.
