@@ -6,7 +6,7 @@ import re
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 from trading_engine import init_trading_db, get_account_summary, set_account_cash_balance, execute_trade
-from strategy_agentic_ai import StrategyAgentError, ask_strategy_agent
+from agent_strategy import StrategyAgentError, ask_strategy_agent
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
@@ -25,16 +25,14 @@ HTML_TEMPLATE = """
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen">
     <div class="max-w-7xl mx-auto p-6">
         <!-- Header -->
-        <header class="flex justify-between items-center border-b border-slate-800 pb-4 mb-6">
+        <header class="flex flex-col gap-4 border-b border-slate-800 pb-4 mb-6 md:flex-row md:items-center md:justify-between">
             <div>
                 <h1 class="text-2xl font-bold text-blue-400">🤖 AEGIS AI Trading Agent</h1>
                 <p class="text-sm text-slate-400">Autonomous Liquid Fund & ETF Advisory Engine (Read-Only Safety Lock Active)</p>
-            </div>
-            <div class="flex gap-4 items-center">
-                <div class="bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg min-w-48">
+                <div class="mt-4 bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg min-w-48">
                     <div class="flex items-center justify-between gap-4">
                         <div>
-                            <span class="text-xs text-slate-400 block">Dummy Cash Balance</span>
+                            <span class="text-xs text-slate-400 block">Cash Balance</span>
                             <span id="cash-display" class="text-lg font-semibold text-emerald-400">₹1,000.00</span>
                         </div>
                         <button type="button" onclick="showCashEditor()" class="border border-slate-700 hover:bg-slate-800 text-slate-200 px-3 py-1 rounded text-sm">Edit</button>
@@ -50,16 +48,15 @@ HTML_TEMPLATE = """
                         <p id="cash-status" role="status" aria-live="polite" class="text-xs text-slate-400"></p>
                     </form>
                 </div>
-
-                <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-                    <h2 class="text-md font-semibold mb-3 text-indigo-400">Upload Holdings Summary</h2>
-                    <form id="holdings-upload-form" onsubmit="uploadHoldingsSummary(event)" class="space-y-3">
-                        <input id="holdings-file" name="file" type="file" accept=".csv,.xls,.xlsx,.pdf,.txt" required
-                            class="block w-full text-sm text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-blue-600 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-blue-500">
-                        <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded text-sm transition">Upload summary</button>
-                        <p id="holdings-upload-status" role="status" aria-live="polite" class="text-xs text-slate-400"></p>
-                    </form>
-                </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
+                <h2 class="text-md font-semibold mb-3 text-indigo-400">Upload Holdings Summary</h2>
+                <form id="holdings-upload-form" onsubmit="uploadHoldingsSummary(event)" class="space-y-3">
+                    <input id="holdings-file" name="file" type="file" accept=".csv,.xls,.xlsx,.pdf,.txt" required
+                        class="block w-full text-sm text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-blue-600 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-blue-500">
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded text-sm transition">Upload summary</button>
+                    <p id="holdings-upload-status" role="status" aria-live="polite" class="text-xs text-slate-400"></p>
+                </form>
             </div>
         </header>
 
@@ -67,13 +64,10 @@ HTML_TEMPLATE = """
         <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <section class="flex h-[70vh] min-h-[440px] max-h-[720px] flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 p-5">
                 <header class="mb-4 border-b border-slate-800 pb-3">
-                    <h2 class="text-md font-semibold text-indigo-300">Phi-4-mini Research Chat</h2>
+                    <h2 class="text-md font-semibold text-indigo-300">AEGIS Chat</h2>
                     <p class="mt-1 text-xs text-slate-400">Answers use your indexed statements and market documents. Statement values may not be live.</p>
                 </header>
                 <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
-                    <div class="max-w-[90%] rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
-                        Ask about your uploaded holdings, a mutual fund, a stock, or the indexed market documents.
-                    </div>
                 </div>
                 <form id="chat-form" onsubmit="sendChatMessage(event)" class="mt-4 shrink-0 border-t border-slate-800 pt-4">
                     <label class="sr-only" for="chat-input">Your research question</label>

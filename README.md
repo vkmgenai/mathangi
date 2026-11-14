@@ -10,5 +10,6 @@ ollama run phi4-mini
 
 The RAG index uses two collections: `user_documents` contains private uploaded portfolio statements; `market_information` contains public Zerodha and Moneycontrol market data. Run `python3 sync_market_docs.py` to refresh both collections.
 
-Run python3 app.py and browse http://127.0.0.1:50001/
+MCP server endpoints and the data requested from each provider are listed in `mcp_servers.json`. Add future providers under `mcp_servers`; do not store credentials in this file. The sync script does not yet connect to these endpoints.
 
+Run python3 app.py and browse http://127.0.0.1:50001/

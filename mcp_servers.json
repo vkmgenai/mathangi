@@ -1,0 +1,23 @@
+{
+  "mcp_servers": {
+    "zerodha": {
+      "transport": "streamable-http",
+      "url": "https://mcp.kite.trade/mcp",
+      "requested_data": [
+        "instrument_master",
+        "live_quotes",
+        "historical_quotes"
+      ]
+    },
+    "groww": {
+      "transport": "streamable-http",
+      "url": "https://mcp.groww.in/mcp",
+      "requested_data": [
+        "instrument_master",
+        "live_quotes",
+        "historical_quotes",
+        "user_portfolio_holdings"
+      ]
+    }
+  }
+}
