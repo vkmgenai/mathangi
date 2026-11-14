@@ -7,18 +7,12 @@ from langchain_community.embeddings import FastEmbedEmbeddings
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 QDRANT_PATH = os.path.join(PROJECT_DIR, "qdrant_db")
 COLLECTIONS = {
-    "zerodha": "zerodha_market_docs",
-    "kuvera": "kuvera_market_docs",
-    "groww": "groww_market_docs",
-    "paytmmoney": "paytmmoney_market_docs",
-    "moneycontrol": "moneycontrol_market_docs",
+    "user_documents": "user_documents",
+    "market_information": "market_information",
 }
 SOURCE_LABELS = {
-    "zerodha": "Zerodha",
-    "kuvera": "Kuvera",
-    "groww": "Groww",
-    "paytmmoney": "Paytm Money",
-    "moneycontrol": "Moneycontrol",
+    "user_documents": "User documents",
+    "market_information": "Market information",
 }
 mcp = FastMCP("InvestmentResearchRAG")
 
@@ -66,32 +60,14 @@ def _query_collection(source: str, query: str, limit: int = 5) -> str:
         client.close()
 
 @mcp.tool()
-def query_zerodha_market_docs(query: str) -> str:
-    """
-    Search the daily-synced database of Zerodha market documents,
-    instrument specs, and market circulars for Liquid Funds and ETFs.
-    """
-    return _query_collection("zerodha", query)
+def query_user_documents(query: str) -> str:
+    """Search the private RAG collection containing user-uploaded portfolio statements."""
+    return _query_collection("user_documents", query)
 
 @mcp.tool()
-def query_kuvera_portfolio(query: str) -> str:
-    """Search locally uploaded Kuvera portfolio statements for holdings context."""
-    return _query_collection("kuvera", query)
-
-@mcp.tool()
-def query_groww_portfolio(query: str) -> str:
-    """Search locally uploaded Groww portfolio statements for holdings context."""
-    return _query_collection("groww", query)
-
-@mcp.tool()
-def query_paytmmoney_portfolio(query: str) -> str:
-    """Search locally uploaded Paytm Money portfolio statements for holdings context."""
-    return _query_collection("paytmmoney", query)
-
-@mcp.tool()
-def query_moneycontrol_market_docs(query: str) -> str:
-    """Search dated Moneycontrol market and mutual-fund headlines and short listing snippets."""
-    return _query_collection("moneycontrol", query)
+def query_market_information(query: str) -> str:
+    """Search the public market RAG collection containing Zerodha and Moneycontrol data."""
+    return _query_collection("market_information", query)
 
 @mcp.tool()
 def search_investment_research(query: str, asset_class: str = "both") -> str:
@@ -99,18 +75,11 @@ def search_investment_research(query: str, asset_class: str = "both") -> str:
     if asset_class not in {"stocks", "mutual_funds", "both"}:
         return "asset_class must be 'stocks', 'mutual_funds', or 'both'."
 
-    if asset_class == "stocks":
-        sources = ("zerodha", "groww", "paytmmoney", "moneycontrol")
-    elif asset_class == "mutual_funds":
-        sources = ("kuvera", "groww", "paytmmoney", "moneycontrol")
-    else:
-        sources = tuple(COLLECTIONS)
-
     sections = []
-    for source in sources:
-        result = _query_collection(source, query, limit=3)
+    for collection_key in COLLECTIONS:
+        result = _query_collection(collection_key, query, limit=3)
         if not result.startswith("No relevant ") and not result.startswith("No ") and not result.startswith("RAG database"):
-            sections.append(f"## {SOURCE_LABELS[source]}\n{result}")
+            sections.append(f"## {SOURCE_LABELS[collection_key]}\n{result}")
     if not sections:
         return "No indexed research evidence matched the query. Run sync_market_docs.py first."
     return "\n\n---\n\n".join(sections)

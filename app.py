@@ -6,6 +6,7 @@ import re
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 from trading_engine import init_trading_db, get_account_summary, set_account_cash_balance, execute_trade
+from strategy_agentic_ai import StrategyAgentError, ask_strategy_agent
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
@@ -62,77 +63,108 @@ HTML_TEMPLATE = """
             </div>
         </header>
 
-        <!-- Main Grid -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            <!-- Left Column: LLM Config & Risk Profiles -->
-            <div class="space-y-6">
-                <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-                    <h2 class="text-md font-semibold mb-3 text-indigo-400">What do you want to do today?</h2>
-                    <input type="text" id="agent-prompt" aria-label="Strategy prompt" value="Optimize asset allocation for my available capital." autofocus class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm font-normal italic caret-emerald-400 mb-3">
-                    <button onclick="runAgent()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 rounded-lg text-sm transition">Run Advisory Agent</button>
-                </div>
-
-                <!-- Risk Profile Recommendations -->
-                <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-                    <h2 class="text-md font-semibold mb-3 text-indigo-400">📊 Risk-Based Allocations</h2>
-                    <div class="space-y-3">
-                        <div class="p-3 bg-slate-950 rounded-lg border border-slate-800">
-                            <div class="flex justify-between items-center mb-1">
-                                <span class="font-medium text-emerald-400 text-sm">Low Risk (LIQUIDCASE)</span>
-                                <button onclick="quickBuy('LIQUIDCASE', 'Zerodha Nifty 1D Rate Liquid ETF', 8, 116.75)" class="text-xs bg-emerald-600 hover:bg-emerald-500 px-2 py-1 rounded text-white">Buy (8 Units)</button>
-                            </div>
-                            <p class="text-xs text-slate-400">Expense: 0.23% | Focus: Capital Safety & Near-Zero Volatility</p>
-                        </div>
-                        <div class="p-3 bg-slate-950 rounded-lg border border-slate-800">
-                            <div class="flex justify-between items-center mb-1">
-                                <span class="font-medium text-blue-400 text-sm">Medium Risk (NIFTYBEES)</span>
-                                <button onclick="quickBuy('NIFTYBEES', 'Nifty 50 ETF', 3, 250.00)" class="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded text-white">Buy (3 Units)</button>
-                            </div>
-                            <p class="text-xs text-slate-400">Expense: 0.05% | Focus: Blue-chip Growth & Stability</p>
-                        </div>
-                        <div class="p-3 bg-slate-950 rounded-lg border border-slate-800">
-                            <div class="flex justify-between items-center mb-1">
-                                <span class="font-medium text-amber-400 text-sm">High Risk (ITBEES)</span>
-                                <button onclick="quickBuy('ITBEES', 'Nifty IT Sector ETF', 1, 500.00)" class="text-xs bg-amber-600 hover:bg-amber-500 px-2 py-1 rounded text-white">Buy (1 Unit)</button>
-                            </div>
-                            <p class="text-xs text-slate-400">Focus: Sectoral Upside & Aggressive Growth</p>
-                        </div>
+        <!-- Research Chat and Customer Portfolio -->
+        <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <section class="flex h-[70vh] min-h-[440px] max-h-[720px] flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 p-5">
+                <header class="mb-4 border-b border-slate-800 pb-3">
+                    <h2 class="text-md font-semibold text-indigo-300">Phi-4-mini Research Chat</h2>
+                    <p class="mt-1 text-xs text-slate-400">Answers use your indexed statements and market documents. Statement values may not be live.</p>
+                </header>
+                <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
+                    <div class="max-w-[90%] rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
+                        Ask about your uploaded holdings, a mutual fund, a stock, or the indexed market documents.
                     </div>
                 </div>
-            </div>
-
-            <!-- Center & Right Column: Terminal, Portfolio & Execution Controls -->
-            <div class="lg:col-span-2 space-y-6">
-                <!-- Agent Reasoning & RAG Output Terminal -->
-                <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-                    <h2 class="text-md font-semibold mb-3 text-indigo-400">💬 Agent Advisory Log & RAG Context</h2>
-                    <div id="terminal-output" class="bg-slate-950 border border-slate-800 p-4 rounded-lg h-48 overflow-y-auto text-xs font-mono text-slate-300">
-                        System initialized with ₹1,000 cash. Zerodha daily document RAG ready. Select a profile or run agent query to generate recommendations...
+                <form id="chat-form" onsubmit="sendChatMessage(event)" class="mt-4 shrink-0 border-t border-slate-800 pt-4">
+                    <label class="sr-only" for="chat-input">Your research question</label>
+                    <textarea id="chat-input" rows="3" maxlength="4000" required placeholder="Ask a question about your portfolio or market research..."
+                        class="w-full resize-none rounded border border-slate-700 bg-slate-950 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"></textarea>
+                    <div class="mt-2 flex items-center justify-between gap-3">
+                        <p id="chat-status" role="status" aria-live="polite" class="text-xs text-slate-400">Phi-4-mini · Indexed RAG sources</p>
+                        <button id="chat-send" type="submit" class="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-wait disabled:opacity-60">Send</button>
                     </div>
+                </form>
+            </section>
+
+            <section class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                    <h2 class="text-md font-semibold text-indigo-400">Current Available Portfolio</h2>
+                    <button id="refresh-summaries" type="button" onclick="fetchCustomerSummaries()" title="Refresh summaries" aria-label="Refresh summaries"
+                        class="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800">Refresh</button>
                 </div>
-
-                <!-- Customer Holdings Summaries -->
-                <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-                    <div class="flex items-center justify-between gap-3 mb-3">
-                        <h2 class="text-md font-semibold text-indigo-400">Current Available Portfolio</h2>
-                        <button id="refresh-summaries" type="button" onclick="fetchCustomerSummaries()" title="Refresh summaries" aria-label="Refresh summaries"
-                            class="border border-slate-700 hover:bg-slate-800 text-slate-200 px-3 py-1.5 rounded text-sm">Refresh</button>
-                    </div>
-                    <div id="customer-portfolio-totals" class="mb-5 grid grid-cols-2 gap-y-3 md:grid-cols-4 md:gap-0" aria-live="polite">
-                        <p class="text-sm text-slate-400">Loading customer totals...</p>
-                    </div>
-                    <div id="holdings-summaries" class="space-y-2" aria-live="polite">
-                        <p class="text-sm text-slate-400">Loading summaries...</p>
-                    </div>
+                <div id="customer-portfolio-totals" class="mb-5 grid grid-cols-2 gap-y-3 md:grid-cols-4 md:gap-0" aria-live="polite">
+                    <p class="text-sm text-slate-400">Loading customer totals...</p>
                 </div>
-            </div>
-
+                <div id="holdings-summaries" class="space-y-2" aria-live="polite">
+                    <p class="text-sm text-slate-400">Loading summaries...</p>
+                </div>
+            </section>
         </div>
     </div>
 
     <script>
         let currentCashBalance = 1000;
+        let chatHistory = [];
+
+        function appendChatMessage(role, text) {
+            const message = document.createElement('div');
+            message.className = role === 'user' ? 'ml-auto max-w-[90%]' : 'mr-auto max-w-[90%]';
+
+            const label = document.createElement('p');
+            label.className = 'mb-1 text-[11px] text-slate-500';
+            label.textContent = role === 'user' ? 'You' : 'Phi-4-mini';
+
+            const bubble = document.createElement('div');
+            bubble.className = role === 'user'
+                ? 'whitespace-pre-wrap rounded-lg bg-emerald-950 px-3 py-2.5 text-sm text-emerald-100'
+                : 'whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 px-3 py-2.5 text-sm text-slate-200';
+            bubble.textContent = text;
+            message.append(label, bubble);
+            const container = document.getElementById('chat-messages');
+            container.appendChild(message);
+            container.scrollTop = container.scrollHeight;
+            return bubble;
+        }
+
+        async function sendChatMessage(event) {
+            event.preventDefault();
+            const input = document.getElementById('chat-input');
+            const sendButton = document.getElementById('chat-send');
+            const status = document.getElementById('chat-status');
+            const prompt = input.value.trim();
+            if (!prompt || sendButton.disabled) return;
+
+            appendChatMessage('user', prompt);
+            input.value = '';
+            sendButton.disabled = true;
+            status.textContent = 'Searching indexed documents and waiting for Phi-4-mini...';
+            const responseBubble = appendChatMessage('assistant', 'Searching your indexed sources...');
+
+            try {
+                const response = await fetch('/api/agent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, history: chatHistory })
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.error || 'The research request failed.');
+                }
+
+                responseBubble.textContent = result.answer;
+                chatHistory.push({ role: 'user', content: prompt });
+                chatHistory.push({ role: 'assistant', content: result.answer });
+                chatHistory = chatHistory.slice(-8);
+                status.textContent = 'Phi-4-mini · Indexed RAG sources';
+            } catch (error) {
+                responseBubble.textContent = error.message;
+                responseBubble.className = 'whitespace-pre-wrap rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2.5 text-sm text-rose-200';
+                status.textContent = 'Request failed';
+            } finally {
+                sendButton.disabled = false;
+                input.focus();
+            }
+        }
 
         async function fetchAccountSummary() {
             const res = await fetch('/api/portfolio');
@@ -373,32 +405,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function quickBuy(symbol, name, quantity, price) {
-            const res = await fetch('/api/trade', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'BUY', symbol, name, quantity, price })
-            });
-            const result = await res.json();
-            const terminal = document.getElementById('terminal-output');
-            terminal.innerHTML += `\\n[EXECUTION] ${result.message || result.error}`;
-            terminal.scrollTop = terminal.scrollHeight;
-            fetchAccountSummary();
-        }
-
-        async function quickSell(symbol, name, quantity, price) {
-            const res = await fetch('/api/trade', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'SELL', symbol, name, quantity, price })
-            });
-            const result = await res.json();
-            const terminal = document.getElementById('terminal-output');
-            terminal.innerHTML += `\\n[EXECUTION] ${result.message || result.error}`;
-            terminal.scrollTop = terminal.scrollHeight;
-            fetchAccountSummary();
-        }
-
         async function uploadHoldingsSummary(event) {
             event.preventDefault();
             const form = event.currentTarget;
@@ -421,17 +427,6 @@ HTML_TEMPLATE = """
             } catch (error) {
                 status.textContent = error.message;
             }
-        }
-
-        async function runAgent() {
-            const prompt = document.getElementById('agent-prompt').value;
-            const terminal = document.getElementById('terminal-output');
-            terminal.textContent += `\\n[AGENT QUERY] ${prompt}\\nAnalyzing Zerodha market RAG docs...`;
-
-            setTimeout(() => {
-                terminal.textContent += `\\n[AGENT RESPONSE] Based on the available market documentation, review the portfolio summaries and risk options before making a simulated trade.`;
-                terminal.scrollTop = terminal.scrollHeight;
-            }, 800);
         }
 
         fetchAccountSummary();
@@ -458,6 +453,40 @@ def api_set_portfolio_cash():
     except (TypeError, ValueError):
         return jsonify({"error": "Enter a valid, non-negative cash amount."}), 400
     return jsonify({"cash_balance": saved_balance})
+
+@app.route("/api/agent", methods=["POST"])
+def api_strategy_agent():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Send a JSON request with a prompt."}), 400
+
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return jsonify({"error": "Enter a research question."}), 400
+    if len(prompt) > 4000:
+        return jsonify({"error": "Keep the question under 4,000 characters."}), 400
+
+    raw_history = data.get("history", [])
+    history = []
+    if isinstance(raw_history, list):
+        for item in raw_history[-8:]:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role in {"user", "assistant"} and isinstance(content, str):
+                history.append({"role": role, "content": content[:4000]})
+
+    try:
+        answer = ask_strategy_agent(prompt, chat_history=history)
+        return jsonify({"answer": answer})
+    except StrategyAgentError as error:
+        message = str(error)
+        status_code = 504 if "did not respond within" in message else 502
+        return jsonify({"error": message}), status_code
+    except Exception:
+        logging.exception("Strategy agent request failed")
+        return jsonify({"error": "The research request could not be completed."}), 500
 
 def _header_field(label):
     normalized = re.sub(r"[^a-z0-9%&]+", "", label.lower())

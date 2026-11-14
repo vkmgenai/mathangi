@@ -16,19 +16,18 @@ from qdrant_client.http import models
 ZERODHA_INSTRUMENTS_URL = "https://api.kite.trade/instruments"
 ZERODHA_CIRCULARS_URL = "https://zerodha.com/marketintel/circulars/"
 COLLECTION_NAME = "zerodha_market_docs"
+USER_DOCUMENTS_COLLECTION = "user_documents"
+MARKET_INFORMATION_COLLECTION = "market_information"
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 QDRANT_PATH = os.path.join(PROJECT_DIR, "qdrant_db")
 CUSTOMER_DATA_PATH = os.path.join(PROJECT_DIR, "customer_data")
-SOURCE_COLLECTIONS = {
-    "kuvera": "kuvera_market_docs",
-    "groww": "groww_market_docs",
-    "paytmmoney": "paytmmoney_market_docs",
-    "moneycontrol": "moneycontrol_market_docs",
-}
 BROKER_SOURCE_LABELS = {
+    "zerodha_portfolio": "Zerodha",
     "kuvera": "Kuvera",
     "groww": "Groww",
     "paytmmoney": "Paytm Money",
+    "bajaj_finserv": "Bajaj Finserv",
+    "customer_portfolio": "Customer portfolio",
 }
 MONEYCONTROL_SECTION_URLS = {
     "stocks": "https://www.moneycontrol.com/news/business/markets/",
@@ -169,7 +168,7 @@ def _read_customer_statement(path: str, filename: str, source: str) -> list[Docu
 
 def fetch_customer_portfolio_docs(source: str) -> list[Document]:
     """Read user-provided statement files for one supported broker."""
-    if source not in BROKER_SOURCE_LABELS or not os.path.isdir(CUSTOMER_DATA_PATH):
+    if source not in BROKER_SOURCE_LABELS or source == "customer_portfolio" or not os.path.isdir(CUSTOMER_DATA_PATH):
         return []
 
     supported_extensions = {".pdf", ".txt", ".csv", ".xls", ".xlsx"}
@@ -186,6 +185,28 @@ def fetch_customer_portfolio_docs(source: str) -> list[Document]:
         except Exception:
             logging.exception("Could not read %s portfolio statement %s", source, filename)
     print(f"Indexed {len(docs)} {BROKER_SOURCE_LABELS[source]} statement pages/sheets.")
+    return docs
+
+def fetch_unmatched_customer_portfolio_docs() -> list[Document]:
+    """Index uploaded statements that do not match a known provider filename."""
+    if not os.path.isdir(CUSTOMER_DATA_PATH):
+        return []
+
+    known_providers = tuple(source for source in BROKER_SOURCE_LABELS if source != "customer_portfolio")
+    supported_extensions = {".pdf", ".txt", ".csv", ".xls", ".xlsx"}
+    docs = []
+    for filename in sorted(os.listdir(CUSTOMER_DATA_PATH)):
+        extension = os.path.splitext(filename)[1].lower()
+        if extension not in supported_extensions or any(source in filename.lower() for source in known_providers):
+            continue
+        path = os.path.join(CUSTOMER_DATA_PATH, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            docs.extend(_read_customer_statement(path, filename, "customer_portfolio"))
+        except Exception:
+            logging.exception("Could not read customer portfolio statement %s", filename)
+    print(f"Indexed {len(docs)} additional customer statement pages/sheets.")
     return docs
 
 def fetch_moneycontrol_market_docs() -> list[Document]:
@@ -274,32 +295,40 @@ def _overwrite_collection(client, embeddings, text_splitter, collection_name, do
     print(f"Indexed {len(splits)} chunks into '{collection_name}'.")
 
 def overwrite_market_vector_store():
-    """Refresh Zerodha, broker-statement, and Moneycontrol RAG collections."""
-    zerodha_docs = fetch_zerodha_instruments() + fetch_zerodha_market_bulletins()
-    source_docs = {
-        source: fetch_customer_portfolio_docs(source)
-        for source in BROKER_SOURCE_LABELS
-    }
-    source_docs["moneycontrol"] = fetch_moneycontrol_market_docs()
+    """Refresh the private user-documents and public market-information indexes."""
+    user_docs = []
+    for source in BROKER_SOURCE_LABELS:
+        if source != "customer_portfolio":
+            user_docs.extend(fetch_customer_portfolio_docs(source))
+    user_docs.extend(fetch_unmatched_customer_portfolio_docs())
+
+    market_docs = fetch_zerodha_instruments() + fetch_zerodha_market_bulletins()
+    market_docs.extend(fetch_moneycontrol_market_docs())
 
     client = QdrantClient(path=QDRANT_PATH)
     embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
 
     try:
-        _overwrite_collection(client, embeddings, text_splitter, COLLECTION_NAME, zerodha_docs)
-        for source, docs in source_docs.items():
-            _overwrite_collection(
-                client,
-                embeddings,
-                text_splitter,
-                SOURCE_COLLECTIONS[source],
-                docs,
-                preserve_on_empty=(source == "moneycontrol"),
-            )
+        _overwrite_collection(
+            client,
+            embeddings,
+            text_splitter,
+            USER_DOCUMENTS_COLLECTION,
+            user_docs,
+            preserve_on_empty=True,
+        )
+        _overwrite_collection(
+            client,
+            embeddings,
+            text_splitter,
+            MARKET_INFORMATION_COLLECTION,
+            market_docs,
+            preserve_on_empty=True,
+        )
     finally:
         client.close()
-    print("Daily sync complete for Zerodha, broker statements, and Moneycontrol.")
+    print("Daily sync complete: user_documents and market_information.")
 
 if __name__ == "__main__":
     overwrite_market_vector_store()
