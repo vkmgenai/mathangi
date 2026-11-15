@@ -6,12 +6,10 @@ from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
-from langchain_community.embeddings import FastEmbedEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-from langchain_qdrant import QdrantVectorStore
+from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
 
 ZERODHA_INSTRUMENTS_URL = "https://api.kite.trade/instruments"
 ZERODHA_CIRCULARS_URL = "https://zerodha.com/marketintel/circulars/"
@@ -19,8 +17,12 @@ COLLECTION_NAME = "zerodha_market_docs"
 USER_DOCUMENTS_COLLECTION = "user_documents"
 MARKET_INFORMATION_COLLECTION = "market_information"
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-QDRANT_PATH = os.path.join(PROJECT_DIR, "qdrant_db")
+CHROMA_PATH = os.path.join(PROJECT_DIR, "chroma_db")
 CUSTOMER_DATA_PATH = os.path.join(PROJECT_DIR, "customer_data")
+EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+EMBEDDING_MODEL_CHUNK_SIZE = 500
+EMBEDDING_MODEL_CHUNK_OVERLAP = 50
+EMBEDDING_DIMENSION = 768
 BROKER_SOURCE_LABELS = {
     "zerodha_portfolio": "Zerodha",
     "kuvera": "Kuvera",
@@ -270,26 +272,28 @@ def fetch_moneycontrol_market_docs() -> list[Document]:
     print(f"Parsed {len(docs)} current Moneycontrol headlines.")
     return docs
 
-def _overwrite_collection(client, embeddings, text_splitter, collection_name, docs, preserve_on_empty=False):
+def _overwrite_collection(persist_directory, embeddings, text_splitter, collection_name, docs, preserve_on_empty=False):
     if not docs and preserve_on_empty:
         print(f"No fresh documents for '{collection_name}'; preserving the previous index.")
         return
 
-    if client.collection_exists(collection_name):
-        client.delete_collection(collection_name)
     if not docs:
         print(f"No documents available for '{collection_name}'.")
         return
 
     splits = text_splitter.split_documents(docs)
-    client.create_collection(
+    existing_store = Chroma(
+        persist_directory=persist_directory,
         collection_name=collection_name,
-        vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+        embedding_function=embeddings,
+        collection_metadata={"hnsw:space": "cosine"},
     )
-    vector_store = QdrantVectorStore(
-        client=client,
+    existing_store.delete_collection()
+    vector_store = Chroma(
+        persist_directory=persist_directory,
         collection_name=collection_name,
-        embedding=embeddings,
+        embedding_function=embeddings,
+        collection_metadata={"hnsw:space": "cosine"},
     )
     vector_store.add_documents(splits)
     print(f"Indexed {len(splits)} chunks into '{collection_name}'.")
@@ -305,29 +309,25 @@ def overwrite_market_vector_store():
     market_docs = fetch_zerodha_instruments() + fetch_zerodha_market_bulletins()
     market_docs.extend(fetch_moneycontrol_market_docs())
 
-    client = QdrantClient(path=QDRANT_PATH)
-    embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=EMBEDDING_MODEL_CHUNK_SIZE, chunk_overlap=EMBEDDING_MODEL_CHUNK_OVERLAP)
 
-    try:
-        _overwrite_collection(
-            client,
-            embeddings,
-            text_splitter,
-            USER_DOCUMENTS_COLLECTION,
-            user_docs,
-            preserve_on_empty=True,
-        )
-        _overwrite_collection(
-            client,
-            embeddings,
-            text_splitter,
-            MARKET_INFORMATION_COLLECTION,
-            market_docs,
-            preserve_on_empty=True,
-        )
-    finally:
-        client.close()
+    _overwrite_collection(
+        CHROMA_PATH,
+        embeddings,
+        text_splitter,
+        USER_DOCUMENTS_COLLECTION,
+        user_docs,
+        preserve_on_empty=True,
+    )
+    _overwrite_collection(
+        CHROMA_PATH,
+        embeddings,
+        text_splitter,
+        MARKET_INFORMATION_COLLECTION,
+        market_docs,
+        preserve_on_empty=True,
+    )
     print("Daily sync complete: user_documents and market_information.")
 
 if __name__ == "__main__":

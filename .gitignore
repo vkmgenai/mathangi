@@ -1,5 +1,7 @@
-customer_data
+customer*
 customer_data/*
-qdrant_db
+qdrant_db*
 qdrant_db/*
+chroma_db*
+chroma_db/*
 requirements.txt

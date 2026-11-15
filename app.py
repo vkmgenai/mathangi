@@ -6,7 +6,8 @@ import re
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 from trading_engine import init_trading_db, get_account_summary, set_account_cash_balance, execute_trade
-from agent_strategy import StrategyAgentError, ask_strategy_agent
+from agent_common import AgentError
+from agent_main import run_workflow
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
@@ -65,6 +66,17 @@ HTML_TEMPLATE = """
             <section class="flex h-[70vh] min-h-[440px] max-h-[720px] flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 p-5">
                 <header class="mb-4 border-b border-slate-800 pb-3">
                     <h2 class="text-md font-semibold text-indigo-300">AEGIS Chat</h2>
+                    <fieldset class="mt-3 flex items-center gap-4" aria-label="Agent response mode">
+                        <legend class="sr-only">Choose response mode</legend>
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-300">
+                            <input type="radio" name="agent-mode" value="basic" checked class="accent-emerald-500">
+                            <span>Basic</span>
+                        </label>
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-300">
+                            <input type="radio" name="agent-mode" value="advanced" class="accent-emerald-500">
+                            <span>Advanced</span>
+                        </label>
+                    </fieldset>
                     <p class="mt-1 text-xs text-slate-400">Answers use your indexed statements and market documents. Statement values may not be live.</p>
                 </header>
                 <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
@@ -126,6 +138,7 @@ HTML_TEMPLATE = """
             const sendButton = document.getElementById('chat-send');
             const status = document.getElementById('chat-status');
             const prompt = input.value.trim();
+            const mode = document.querySelector('input[name="agent-mode"]:checked').value;
             if (!prompt || sendButton.disabled) return;
 
             appendChatMessage('user', prompt);
@@ -138,7 +151,7 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/agent', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt, history: chatHistory })
+                    body: JSON.stringify({ prompt, history: chatHistory, mode })
                 });
                 const result = await response.json();
                 if (!response.ok) {
@@ -149,7 +162,7 @@ HTML_TEMPLATE = """
                 chatHistory.push({ role: 'user', content: prompt });
                 chatHistory.push({ role: 'assistant', content: result.answer });
                 chatHistory = chatHistory.slice(-8);
-                status.textContent = 'Phi-4-mini · Indexed RAG sources';
+                status.textContent = `Phi-4-mini · ${mode === 'advanced' ? 'Advanced' : 'Basic'} · Indexed RAG sources`;
             } catch (error) {
                 responseBubble.textContent = error.message;
                 responseBubble.className = 'whitespace-pre-wrap rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2.5 text-sm text-rose-200';
@@ -449,7 +462,7 @@ def api_set_portfolio_cash():
     return jsonify({"cash_balance": saved_balance})
 
 @app.route("/api/agent", methods=["POST"])
-def api_strategy_agent():
+def api_agent_main():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Send a JSON request with a prompt."}), 400
@@ -471,15 +484,20 @@ def api_strategy_agent():
             if role in {"user", "assistant"} and isinstance(content, str):
                 history.append({"role": role, "content": content[:4000]})
 
+    mode = data.get("mode", "basic")
+    if not isinstance(mode, str) or mode.lower() not in {"basic", "advanced"}:
+        return jsonify({"error": "Mode must be Basic or Advanced."}), 400
+    mode = mode.lower()
+
     try:
-        answer = ask_strategy_agent(prompt, chat_history=history)
+        answer = run_workflow(prompt, chat_history=history, mode=mode)
         return jsonify({"answer": answer})
-    except StrategyAgentError as error:
+    except AgentError as error:
         message = str(error)
         status_code = 504 if "did not respond within" in message else 502
         return jsonify({"error": message}), status_code
     except Exception:
-        logging.exception("Strategy agent request failed")
+        logging.exception("Agent request failed")
         return jsonify({"error": "The research request could not be completed."}), 500
 
 def _header_field(label):
